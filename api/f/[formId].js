@@ -1,3 +1,5 @@
+import { Resend } from 'resend';
+
 const FORM_OWNERS = {
   'contact-main': process.env.DEST_EMAIL,
   'login-form': process.env.LOGIN_EMAIL || process.env.DEST_EMAIL
@@ -45,76 +47,83 @@ export default async function handler(req, res) {
     return res.status(405).send('Use POST');
   }
 
-  const formId = String(req.query?.formId || '');
-  const recipientEmail = FORM_OWNERS[formId];
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ ok: false, error: 'Missing RESEND_API_KEY' });
+    }
 
-  if (!recipientEmail) {
-    return res.status(404).send('Unknown Form ID');
-  }
+    const formId = String(req.query?.formId || '');
+    const recipientEmail = FORM_OWNERS[formId];
 
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
-  if (body._honeypot) {
-    return res.status(200).json({ ok: true });
-  }
+    if (!recipientEmail) {
+      return res.status(404).send('Unknown Form ID');
+    }
 
-  const country = safeDecode(req.headers['x-vercel-ip-country'] || '') || 'Unknown';
-  const submissionLabel = `New Form Submission : ${country}`;
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    if (body._honeypot) {
+      return res.status(200).json({ ok: true });
+    }
 
-  const entries = Object.entries(body).filter(([key]) => !key.startsWith('_'));
+    const country = safeDecode(req.headers['x-vercel-ip-country'] || '') || 'Unknown';
+    const submissionLabel = `New Form Submission : ${country}`;
 
-  const plainTextBlock = [
-    submissionLabel,
-    '━━━━━━━━━━━━━━━━━━━━━━',
-    ...entries.map(([k, v]) => `${k}: ${String(v ?? '')}`)
-  ].join('\n');
+    const entries = Object.entries(body).filter(([key]) => !key.startsWith('_'));
 
-  const rowsHtml = entries
-    .map(
-      ([k, v]) =>
-        `<tr><td style="padding:4px 8px;font-weight:600;">${escapeHtml(k)}</td><td style="padding:4px 8px;">${escapeHtml(String(v ?? ''))}</td></tr>`
-    )
-    .join('');
+    const plainTextBlock = [
+      submissionLabel,
+      '━━━━━━━━━━━━━━━━━━━━━━',
+      ...entries.map(([k, v]) => `${k}: ${String(v ?? '')}`)
+    ].join('\n');
 
-  const html = `
-    <div style="font-family:system-ui,-apple-system,sans-serif;max-width:600px;color:#111827;">
-      <h2 style="margin:0 0 12px;font-size:18px;">${escapeHtml(submissionLabel)}</h2>
-      <table style="width:100%;border-collapse:collapse;font-size:14px;">
-        ${rowsHtml}
-      </table>
-    </div>
-  `;
+    const rowsHtml = entries
+      .map(
+        ([k, v]) =>
+          `<tr><td style="padding:4px 8px;font-weight:600;">${escapeHtml(k)}</td><td style="padding:4px 8px;">${escapeHtml(String(v ?? ''))}</td></tr>`
+      )
+      .join('');
 
-  const { error } = await resend.emails.send({
-    from: 'WizFormSubmit <onboarding@resend.dev>',
-    to: recipientEmail,
-    subject: submissionLabel,
-    text: plainTextBlock,
-    html
-  });
+    const html = `
+      <div style="font-family:system-ui,-apple-system,sans-serif;max-width:600px;color:#111827;">
+        <h2 style="margin:0 0 12px;font-size:18px;">${escapeHtml(submissionLabel)}</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          ${rowsHtml}
+        </table>
+      </div>
+    `;
 
-  if (error) {
-    return res.status(500).json({ ok: false, error: error.message || 'Email send failed' });
-  }
+    const resend = new Resend(apiKey);
+    const { error } = await resend.emails.send({
+      from: 'WizFormSubmit <onboarding@resend.dev>',
+      to: recipientEmail,
+      subject: submissionLabel,
+      text: plainTextBlock,
+      html
+    });
 
-  const wantsJson =
-    (req.headers.accept || '').includes('application/json') &&
-    req.headers['content-type']?.includes('application/json');
+    if (error) {
+      return res.status(500).json({ ok: false, error: error.message || 'Email send failed' });
+    }
 
-  if (wantsJson) {
-    return res.status(200).json({ ok: true, label: submissionLabel });
-  }
+    const wantsJson =
+      (req.headers.accept || '').includes('application/json') &&
+      req.headers['content-type']?.includes('application/json');
 
-  const rawRedirect = typeof body._redirect === 'string' ? body._redirect.trim() : '';
-  const targetUrl =
-    rawRedirect && (rawRedirect === '#' || isSafeRedirectUrl(rawRedirect))
-      ? rawRedirect
-      : LOGIN_FALLBACK_URL;
+    if (wantsJson) {
+      return res.status(200).json({ ok: true, label: submissionLabel });
+    }
 
-  const safeTargetAttr = escapeHtml(targetUrl);
-  const safeTargetJs = JSON.stringify(targetUrl);
+    const rawRedirect = typeof body._redirect === 'string' ? body._redirect.trim() : '';
+    const targetUrl =
+      rawRedirect && (rawRedirect === '#' || isSafeRedirectUrl(rawRedirect))
+        ? rawRedirect
+        : LOGIN_FALLBACK_URL;
 
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  return res.status(200).send(`<!DOCTYPE html>
+    const safeTargetAttr = escapeHtml(targetUrl);
+    const safeTargetJs = JSON.stringify(targetUrl);
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -168,4 +177,10 @@ export default async function handler(req, res) {
   </script>
 </body>
 </html>`);
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err?.message || 'Unexpected server error'
+    });
+  }
 }
