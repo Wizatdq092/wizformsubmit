@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family:sans-serif;max-width:400px;margin:4rem auto;">
+  <h2>WizFormSubmit Test</h2>
+  <form action="/f/contact-main" method="POST">
+    <input type="email" name="email" placeholder="Your email" required style="width:100%;padding:8px;margin-bottom:10px;" />
+    <textarea name="message" placeholder="Message" required style="width:100%;padding:8px;margin-bottom:10px;"></textarea>
+    <button type="submit" style="padding:10px 20px;">Send</button>
+  </form>
+</body>
+</html>
