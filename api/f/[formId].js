@@ -60,9 +60,7 @@ export default async function handler(req, res) {
   const country = safeDecode(req.headers['x-vercel-ip-country'] || '') || 'Unknown';
   const submissionLabel = `New Form Submission : ${country}`;
 
-  const entries = Object.entries(body).filter(
-    ([key]) => !key.startsWith('_')
-  );
+  const entries = Object.entries(body).filter(([key]) => !key.startsWith('_'));
 
   const plainTextBlock = [
     submissionLabel,
@@ -98,7 +96,10 @@ export default async function handler(req, res) {
     return res.status(500).json({ ok: false, error: error.message || 'Email send failed' });
   }
 
-  const wantsJson = (req.headers.accept || '').includes('application/json') && req.headers['content-type']?.includes('application/json');
+  const wantsJson =
+    (req.headers.accept || '').includes('application/json') &&
+    req.headers['content-type']?.includes('application/json');
+
   if (wantsJson) {
     return res.status(200).json({ ok: true, label: submissionLabel });
   }
