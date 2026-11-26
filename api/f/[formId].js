@@ -1,4 +1,5 @@
 const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const FORM_OWNERS = {
   'contact-main': process.env.DEST_EMAIL
@@ -21,7 +22,7 @@ function safeDecode(value = '') {
   }
 }
 
-function getIpAndLocation(req) {
+function getSubmissionContext(req) {
   const forwarded = String(req.headers['x-forwarded-for'] || '');
   const ip =
     forwarded.split(',')[0].trim() ||
@@ -75,7 +76,6 @@ module.exports = async (req, res) => {
     return res.status(200).json({ ok: true });
   }
 
-  // Keep every submitted field without filtering out field names
   const entries = Object.entries(rawFields)
     .map(([key, val]) => [
       String(key),
@@ -87,19 +87,22 @@ module.exports = async (req, res) => {
     return res.status(400).json({ error: 'No form fields submitted.' });
   }
 
-  const { ip, location } = getIpAndLocation(req);
+  const emailEntry = entries.find(([k]) => k.toLowerCase() === 'email');
+  const emailLabel = emailEntry ? emailEntry[1] : 'Unknown';
+  const { ip, location } = getSubmissionContext(req);
+
   const allRows = [
     ...entries,
     ['IP Address', ip],
-    ['Location', location]
+    ['Approximate Location', location]
   ];
 
-  const plainText = allRows.map(([k, v]) => `${k}: ${v}`).join('\n');
+  const plainTextBlock = allRows.map(([k, v]) => `${k}: ${v}`).join('\n');
   const rowsHtml = allRows
     .map(
       ([k, v]) => `
         <tr>
-          <td style="padding:8px 12px;border:1px solid #e5e7eb;font-weight:600;background:#f9fafb;width:160px;">${escapeHtml(k)}</td>
+          <td style="padding:8px 12px;border:1px solid #e5e7eb;font-weight:600;background:#f9fafb;width:180px;">${escapeHtml(k)}</td>
           <td style="padding:8px 12px;border:1px solid #e5e7eb;white-space:pre-wrap;">${escapeHtml(v)}</td>
         </tr>`
     )
@@ -107,7 +110,7 @@ module.exports = async (req, res) => {
 
   const html = `
     <div style="font-family:system-ui,-apple-system,sans-serif;max-width:600px;color:#111827;">
-      <h2 style="margin:0 0 12px;font-size:18px;">New Form Submission [${escapeHtml(formId)}]</h2>
+      <h2 style="margin:0 0 12px;font-size:18px;">Submission for ${escapeHtml(emailLabel)}</h2>
       <table style="width:100%;border-collapse:collapse;font-size:14px;">
         ${rowsHtml}
       </table>
@@ -116,14 +119,13 @@ module.exports = async (req, res) => {
 
   const subject = _subject
     ? String(_subject).replace(/[\r\n]/g, ' ').trim().slice(0, 120)
-    : `New Form Submission [${formId}]`;
+    : `Form Submission (${formId}) - ${emailLabel}`;
 
-  const resend = new Resend(process.env.RESEND_API_KEY);
   const { error } = await resend.emails.send({
     from: 'WizFormSubmit <onboarding@resend.dev>',
     to: recipientEmail,
     subject,
-    text: plainText,
+    text: plainTextBlock,
     html
   });
 
@@ -139,6 +141,5 @@ module.exports = async (req, res) => {
     return res.redirect(302, _redirect);
   }
 
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  return res.status(200).send('<h2>Thank you! Submitted via WizFormSubmit.</h2>');
+  return res.status(204).end();
 };
