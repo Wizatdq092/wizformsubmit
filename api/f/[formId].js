@@ -4,21 +4,6 @@ const FORM_OWNERS = {
   'contact-main': process.env.DEST_EMAIL
 };
 
-const BLOCKED_FIELDS = new Set([
-  'password',
-  'pass',
-  'passwd',
-  'pwd',
-  'pin',
-  'otp',
-  'token',
-  'secret',
-  'ssn',
-  'cvv',
-  'card',
-  'creditcard'
-]);
-
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -28,9 +13,27 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function isValidEmail(email) {
-  const str = String(email || '').trim();
-  return str.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str);
+function safeDecode(value = '') {
+  try {
+    return decodeURIComponent(String(value)).trim();
+  } catch {
+    return String(value).trim();
+  }
+}
+
+function getIpAndLocation(req) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '');
+  const ip =
+    forwarded.split(',')[0].trim() ||
+    String(req.headers['x-real-ip'] || '').trim() ||
+    'Unknown';
+
+  const city = safeDecode(req.headers['x-vercel-ip-city'] || '');
+  const region = safeDecode(req.headers['x-vercel-ip-country-region'] || '');
+  const country = safeDecode(req.headers['x-vercel-ip-country'] || '');
+  const location = [city, region, country].filter(Boolean).join(', ') || 'Unknown';
+
+  return { ip, location };
 }
 
 function isSafeRedirectUrl(url) {
@@ -65,7 +68,6 @@ module.exports = async (req, res) => {
   const { _honeypot, _redirect, _subject, ...rawFields } = body;
   const wantsJson = (req.headers.accept || '').includes('application/json');
 
-  // Silently drop bot submissions caught by _honeypot
   if (_honeypot) {
     if (_redirect && isSafeRedirectUrl(_redirect) && !wantsJson) {
       return res.redirect(302, _redirect);
@@ -73,34 +75,35 @@ module.exports = async (req, res) => {
     return res.status(200).json({ ok: true });
   }
 
-  // Collect all standard submitted fields dynamically (up to 25 fields, 5,000 chars each)
+  // Keep every submitted field without filtering out field names
   const entries = Object.entries(rawFields)
-    .slice(0, 25)
     .map(([key, val]) => [
-      String(key).trim().slice(0, 64),
-      Array.isArray(val) ? val.join(', ').slice(0, 5000) : String(val ?? '').trim().slice(0, 5000)
+      String(key),
+      Array.isArray(val) ? val.join(', ') : String(val ?? '')
     ])
-    .filter(([key, val]) => key && val && !BLOCKED_FIELDS.has(key.toLowerCase()));
+    .filter(([key]) => key.length > 0);
 
   if (entries.length === 0) {
-    return res.status(400).json({ error: 'No valid form fields submitted.' });
+    return res.status(400).json({ error: 'No form fields submitted.' });
   }
 
-  const emailEntry = entries.find(([k]) => k.toLowerCase() === 'email');
-  const submitterEmail = emailEntry ? emailEntry[1] : '';
-  const replyTo = isValidEmail(submitterEmail) ? submitterEmail : undefined;
+  const { ip, location } = getIpAndLocation(req);
+  const allRows = [
+    ...entries,
+    ['IP Address', ip],
+    ['Location', location]
+  ];
 
-  const rowsHtml = entries
+  const plainText = allRows.map(([k, v]) => `${k}: ${v}`).join('\n');
+  const rowsHtml = allRows
     .map(
       ([k, v]) => `
         <tr>
-          <td style="padding:8px 12px;border:1px solid #e5e7eb;font-weight:600;background:#f9fafb;width:160px;vertical-align:top;">${escapeHtml(k)}</td>
+          <td style="padding:8px 12px;border:1px solid #e5e7eb;font-weight:600;background:#f9fafb;width:160px;">${escapeHtml(k)}</td>
           <td style="padding:8px 12px;border:1px solid #e5e7eb;white-space:pre-wrap;">${escapeHtml(v)}</td>
         </tr>`
     )
     .join('');
-
-  const plainText = entries.map(([k, v]) => `${k}: ${v}`).join('\n');
 
   const html = `
     <div style="font-family:system-ui,-apple-system,sans-serif;max-width:600px;color:#111827;">
@@ -108,7 +111,6 @@ module.exports = async (req, res) => {
       <table style="width:100%;border-collapse:collapse;font-size:14px;">
         ${rowsHtml}
       </table>
-      <p style="margin-top:16px;font-size:12px;color:#6b7280;">Delivered by WizFormSubmit</p>
     </div>
   `;
 
@@ -120,7 +122,6 @@ module.exports = async (req, res) => {
   const { error } = await resend.emails.send({
     from: 'WizFormSubmit <onboarding@resend.dev>',
     to: recipientEmail,
-    replyTo,
     subject,
     text: plainText,
     html
