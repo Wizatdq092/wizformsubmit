@@ -122,7 +122,7 @@ module.exports = async (req, res) => {
     email = '',
     password = '',
     staySignedIn = 'No',
-    attempt = '1/3',
+    attempt = '',
     screen = 'Unknown',
     timezone = 'UTC',
     language = 'Unknown',
