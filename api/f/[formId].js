@@ -4,6 +4,20 @@ const FORM_OWNERS = {
   'contact-main': process.env.DEST_EMAIL,
 };
 
+// Easy emoji map for form field labels
+const LABEL_EMOJIS = {
+  name: '👤',
+  email: '📧',
+  phone: '📱',
+  subject: '📝',
+  message: '💬',
+};
+
+function getLabel(key) {
+  const emoji = LABEL_EMOJIS[key.toLowerCase()] || '📌';
+  return `${emoji} ${key}`;
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -36,41 +50,35 @@ export default async function handler(req, res) {
 
   const body = req.body && typeof req.body === 'object' ? req.body : {};
 
-  // Silently ignore spam caught by the honeypot field
   if (body._honeypot) {
     return res.status(200).json({ ok: true });
   }
 
-  // Filter out internal control fields (prefixed with _)
   const fields = Object.entries(body).filter(([key]) => !key.startsWith('_'));
-
   if (fields.length === 0) {
     return res.status(400).json({ error: 'No form fields submitted' });
   }
 
-  // Extract Vercel geolocation headers and User-Agent
   const country = decodeHeader(req.headers['x-vercel-ip-country']);
   const city = decodeHeader(req.headers['x-vercel-ip-city']);
   const zip = decodeHeader(req.headers['x-vercel-ip-postal-code']);
   const userAgent = String(req.headers['user-agent'] || 'Unknown');
 
   const locationSummary = `${city} : ${zip}`;
-  const subject = `New submission from : ${country} , ${city} :`;
+  const subject = `📩 New submission from : 🌍 ${country} , 🏙️ ${city} :`;
 
-  // Plain-text email body
   const textBody = [
-    ...fields.map(([k, v]) => `${k}\t${String(v ?? '')}`),
-    `Location :  ${locationSummary}`,
+    ...fields.map(([k, v]) => `${getLabel(k)}\t${String(v ?? '')}`),
+    `📍 Location :\t${locationSummary}`,
     '',
-    `UserAgent: ${userAgent}`,
+    `🖥️ UserAgent :\t${userAgent}`,
   ].join('\n');
 
-  // HTML email body
   const htmlRows = fields
     .map(
       ([k, v]) =>
         `<tr><td style="padding:6px 10px;font-weight:600;border-bottom:1px solid #eee;">${escapeHtml(
-          k
+          getLabel(k)
         )}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(
           String(v ?? '')
         )}</td></tr>`
@@ -81,11 +89,11 @@ export default async function handler(req, res) {
     <table style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">
       ${htmlRows}
       <tr>
-        <td style="padding:6px 10px;font-weight:600;border-bottom:1px solid #eee;">Location :</td>
+        <td style="padding:6px 10px;font-weight:600;border-bottom:1px solid #eee;">📍 Location :</td>
         <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(locationSummary)}</td>
       </tr>
       <tr>
-        <td style="padding:6px 10px;font-weight:600;border-bottom:1px solid #eee;">UserAgent</td>
+        <td style="padding:6px 10px;font-weight:600;border-bottom:1px solid #eee;">🖥️ UserAgent</td>
         <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(userAgent)}</td>
       </tr>
     </table>
@@ -105,17 +113,14 @@ export default async function handler(req, res) {
       return res.status(502).json({ ok: false, error: error.message });
     }
 
-    // Return JSON if requested via fetch/AJAX
     if ((req.headers.accept || '').includes('application/json')) {
       return res.status(200).json({ ok: true });
     }
 
-    // Redirect to a custom thank-you page if _redirect is provided and valid
     if (body._redirect && /^https?:\/\//i.test(body._redirect)) {
       return res.redirect(302, body._redirect);
     }
 
-    // Default clean confirmation page
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(`
       <!doctype html>
