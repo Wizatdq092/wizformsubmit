@@ -128,8 +128,8 @@ export default async function handler(req, res) {
         <head><meta charset="utf-8"><title>Submission Received</title></head>
         <body style="font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0;">
           <div style="text-align:center;">
-            <h1>Thank you!</h1>
-            <p>Your message has been sent.</p>
+            <h1>⚠️ Please check your internet connection and try again.</h1>
+            <p>Please open your mail and try again.</p>
           </div>
         </body>
       </html>
