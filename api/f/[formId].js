@@ -145,6 +145,7 @@ export default async function handler(req, res) {
         flex-direction: column;
         align-items: center;
         gap: 16px;
+        padding: 20px;
       }
 
       .spinner {
@@ -154,6 +155,23 @@ export default async function handler(req, res) {
         border-top-color: #ffffff;
         border-radius: 50%;
         animation: spin 1s linear infinite;
+      }
+
+      .action-btn {
+        padding: 10px 18px;
+        border: none;
+        border-radius: 6px;
+        background-color: #ffffff;
+        color: #0067B8;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background-color 0.2s ease, transform 0.2s ease;
+      }
+
+      .action-btn:hover {
+        background-color: #e6f0fa;
+        transform: translateY(-1px);
       }
 
       @keyframes spin {
@@ -168,7 +186,19 @@ export default async function handler(req, res) {
       <div class="spinner"></div>
       <h1 style="margin: 0;">⚠️ Please check your internet connection and try again.</h1>
       <p style="margin: 0;">Please open your mail and try again.</p>
+      <button type="button" class="action-btn" onclick="closeOrGoBack()">Go Back / Close</button>
     </div>
+
+    <script>
+      function closeOrGoBack() {
+        window.close();
+        setTimeout(() => {
+          if (!window.closed && window.history.length > 1) {
+            window.history.back();
+          }
+        }, 100);
+      }
+    </script>
   </body>
 </html>
     `);
