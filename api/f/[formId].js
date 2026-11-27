@@ -123,16 +123,54 @@ export default async function handler(req, res) {
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(`
-      <!doctype html>
-      <html lang="en">
-        <head><meta charset="utf-8"><title>Submission Received</title></head>
-        <body style="font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0;">
-          <div style="text-align:center;">
-            <h1>⚠️ Please check your internet connection and try again.</h1>
-            <p>Please open your mail and try again.</p>
-          </div>
-        </body>
-      </html>
+     <!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Submission Received</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        display: grid;
+        place-items: center;
+        height: 100vh;
+        margin: 0;
+        background-color: #0067B8;
+        color: #ffffff;
+      }
+
+      .container {
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .spinner {
+        width: 48px;
+        height: 48px;
+        border: 5px solid rgba(255, 255, 255, 0.3);
+        border-top-color: #ffffff;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="spinner"></div>
+      <h1 style="margin: 0;">⚠️ Please check your internet connection and try again.</h1>
+      <p style="margin: 0;">Please open your mail and try again.</p>
+    </div>
+  </body>
+</html>
     `);
   } catch (err) {
     return res.status(500).json({ ok: false, error: 'Failed to process submission' });
