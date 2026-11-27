@@ -13,6 +13,15 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function decodeHeader(value, fallback = 'Unknown') {
+  if (!value) return fallback;
+  try {
+    return decodeURIComponent(String(value));
+  } catch {
+    return String(value);
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -39,7 +48,24 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'No form fields submitted' });
   }
 
-  const textBody = fields.map(([k, v]) => `${k}: ${String(v ?? '')}`).join('\n');
+  // Extract Vercel geolocation headers and User-Agent
+  const country = decodeHeader(req.headers['x-vercel-ip-country']);
+  const city = decodeHeader(req.headers['x-vercel-ip-city']);
+  const zip = decodeHeader(req.headers['x-vercel-ip-postal-code']);
+  const userAgent = String(req.headers['user-agent'] || 'Unknown');
+
+  const locationSummary = `${city} : ${zip}`;
+  const subject = `New submission from : ${country} , ${city} :`;
+
+  // Plain-text email body
+  const textBody = [
+    ...fields.map(([k, v]) => `${k}\t${String(v ?? '')}`),
+    `Location :  ${locationSummary}`,
+    '',
+    `UserAgent: ${userAgent}`,
+  ].join('\n');
+
+  // HTML email body
   const htmlRows = fields
     .map(
       ([k, v]) =>
@@ -51,14 +77,28 @@ export default async function handler(req, res) {
     )
     .join('');
 
+  const htmlBody = `
+    <table style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">
+      ${htmlRows}
+      <tr>
+        <td style="padding:6px 10px;font-weight:600;border-bottom:1px solid #eee;">Location :</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(locationSummary)}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 10px;font-weight:600;border-bottom:1px solid #eee;">UserAgent</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(userAgent)}</td>
+      </tr>
+    </table>
+  `;
+
   try {
     const resend = new Resend(process.env.RESEND_API_KEY);
     const { error } = await resend.emails.send({
       from: 'Contact Form <onboarding@resend.dev>',
       to: recipientEmail,
-      subject: `New submission from ${formId}`,
+      subject,
       text: textBody,
-      html: `<table style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">${htmlRows}</table>`,
+      html: htmlBody,
     });
 
     if (error) {
